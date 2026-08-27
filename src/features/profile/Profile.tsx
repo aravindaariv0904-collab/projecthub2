@@ -22,7 +22,9 @@ import {
   Lock,
   Edit2,
   ExternalLink,
-  Bookmark
+  Bookmark,
+  Camera,
+  QrCode
 } from 'lucide-react';
 import { Student, Project } from '../../types';
 
@@ -56,6 +58,9 @@ export const Profile: React.FC = () => {
   const [editAvatarUrl, setEditAvatarUrl] = useState(currentUser?.avatarUrl || '');
   
   const [toastMsg, setToastMsg] = useState('');
+
+  // Scanner Modal trigger state
+  const [scannerOpen, setScannerOpen] = useState(false);
 
   if (!currentUser) return null;
 
@@ -107,14 +112,18 @@ export const Profile: React.FC = () => {
     setToastMsg(`Connection handshake sent to ${profileUser.name}!`);
   };
 
-  const handleSaveProfileEdit = (e: React.FormEvent) => {
+  const handleSaveProfileEdit = async (e: React.FormEvent) => {
     e.preventDefault();
-    updateProfile({
+    const res = await updateProfile({
       bio: editBio,
       githubUrl: editGithub,
       avatarUrl: editAvatarUrl
     });
-    setToastMsg('Profile updated!');
+    if (res.success) {
+      setToastMsg('Profile updated!');
+    } else {
+      setToastMsg(res.error || 'Failed to update profile.');
+    }
     setEditModalOpen(false);
   };
 
@@ -184,19 +193,29 @@ export const Profile: React.FC = () => {
             )}
 
             {isMe ? (
-              <Button 
-                variant="secondary" 
-                size="sm"
-                onClick={() => {
-                  setEditBio(currentUser.bio);
-                  setEditGithub(currentUser.githubUrl);
-                  setEditAvatarUrl(currentUser.avatarUrl || '');
-                  setEditModalOpen(true);
-                }}
-                leftIcon={<Edit2 className="h-4 w-4" />}
-              >
-                Edit Bio
-              </Button>
+              <div className="flex space-x-2">
+                <Button 
+                  variant="secondary" 
+                  size="sm"
+                  onClick={() => setScannerOpen(true)}
+                  leftIcon={<Camera className="h-4 w-4" />}
+                >
+                  Scan QR
+                </Button>
+                <Button 
+                  variant="secondary" 
+                  size="sm"
+                  onClick={() => {
+                    setEditBio(currentUser.bio);
+                    setEditGithub(currentUser.githubUrl);
+                    setEditAvatarUrl(currentUser.avatarUrl || '');
+                    setEditModalOpen(true);
+                  }}
+                  leftIcon={<Edit2 className="h-4 w-4" />}
+                >
+                  Edit Bio
+                </Button>
+              </div>
             ) : connStatus === 'Connected' ? (
               <Badge variant="success" size="md">
                 Connected
@@ -348,6 +367,77 @@ export const Profile: React.FC = () => {
 
         {/* Right Column: Reputation & Endorsements */}
         <div className="space-y-6">
+          
+          {/* PROJECTHUB PROFILE CARD */}
+          <Card className="p-6 text-center bg-white border border-slate-100 shadow-premium flex flex-col items-center space-y-4">
+            <div className="border-b border-slate-50 pb-2 w-full text-left">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">PROJECTHUB PROFILE CARD</span>
+            </div>
+            
+            <div className="flex items-center space-x-3 w-full text-left bg-slate-50 p-3 rounded-xl border border-slate-100/50">
+              {profileUser.avatarUrl ? (
+                <img src={profileUser.avatarUrl} alt="" className="w-10 h-10 rounded-full object-cover border border-slate-100" />
+              ) : (
+                <div className="w-10 h-10 rounded-full bg-primary-100 text-primary-700 flex items-center justify-center font-bold text-sm">
+                  {profileUser.name.charAt(0)}
+                </div>
+              )}
+              <div className="min-w-0">
+                <h4 className="text-xs font-bold text-slate-800 truncate leading-tight">{profileUser.name}</h4>
+                <p className="text-[10px] text-slate-400 font-semibold truncate leading-none mt-0.5">{profileUser.course}</p>
+                <p className="text-[9px] text-slate-300 font-medium truncate leading-none mt-1">{profileUser.college}</p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap justify-center gap-1">
+              {profileUser.skills.slice(0, 4).map((s: any, idx: number) => (
+                <span key={idx} className="text-[9px] bg-slate-100 text-slate-650 px-2 py-0.5 rounded font-bold">{s.name}</span>
+              ))}
+            </div>
+
+            {/* QR Image Box */}
+            <div className="border border-slate-100 p-3 rounded-xl bg-white shadow-sm relative">
+              {/* Scan box lines */}
+              <div className="absolute top-1.5 left-1.5 w-3.5 h-3.5 border-t-2 border-l-2 border-primary-500" />
+              <div className="absolute top-1.5 right-1.5 w-3.5 h-3.5 border-t-2 border-r-2 border-primary-500" />
+              <div className="absolute bottom-1.5 left-1.5 w-3.5 h-3.5 border-b-2 border-l-2 border-primary-500" />
+              <div className="absolute bottom-1.5 right-1.5 w-3.5 h-3.5 border-b-2 border-r-2 border-primary-500" />
+              
+              <img 
+                src={`https://api.qrserver.com/v1/create-qr-code/?size=140x140&data=${encodeURIComponent(window.location.origin + '/connect/' + profileUser.id)}`} 
+                alt="Profile QR Code" 
+                className="w-32 h-32 select-none" 
+              />
+            </div>
+            
+            <div className="text-center">
+              <span className="text-[10px] text-slate-400 font-bold tracking-wide">Scan to Connect</span>
+              <span className="text-[9px] text-slate-350 block mt-0.5 font-mono">ID: {profileUser.id.substring(0, 8)}...</span>
+            </div>
+
+            {/* Action buttons */}
+            <div className="w-full grid grid-cols-2 gap-2 pt-2 border-t border-slate-50 text-[10px] font-bold text-slate-500">
+              <a 
+                href={`https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(window.location.origin + '/connect/' + profileUser.id)}`}
+                target="_blank"
+                rel="noreferrer"
+                download="qr_code.png"
+                className="w-full text-center py-1.5 border border-slate-200 hover:bg-slate-50 text-slate-600 font-bold rounded-lg block"
+              >
+                Download QR
+              </a>
+              <button 
+                onClick={() => {
+                  navigator.clipboard.writeText(window.location.origin + '/connect/' + profileUser.id);
+                  setToastMsg('Copied profile connection link!');
+                }}
+                className="w-full py-1.5 border border-slate-200 hover:bg-slate-50 text-slate-600 font-bold rounded-lg cursor-pointer"
+              >
+                Copy Link
+              </button>
+            </div>
+          </Card>
+
           {/* Stats details */}
           <Card className="text-center relative">
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block text-left mb-3">Collaboration Score</span>
@@ -471,6 +561,63 @@ export const Profile: React.FC = () => {
           />
         </form>
       </Modal>
+
+      {/* Simulated Scanner Modal */}
+      {scannerOpen && (
+        <Modal
+          isOpen={scannerOpen}
+          onClose={() => setScannerOpen(false)}
+          title="Scan Profile QR Code"
+          size="md"
+        >
+          <div className="space-y-4 text-center font-sans">
+            <p className="text-xs text-slate-500 leading-normal">
+              Align a student's ProjectHub QR profile card within the viewport to connect instantly.
+            </p>
+            
+            {/* Blinking camera scanning box */}
+            <div className="w-56 h-56 mx-auto bg-slate-900 border-2 border-slate-800 rounded-xl relative overflow-hidden flex items-center justify-center shadow-inner">
+              {/* Scan target lines */}
+              <div className="absolute top-3 left-3 w-6 h-6 border-t-2 border-l-2 border-primary-500" />
+              <div className="absolute top-3 right-3 w-6 h-6 border-t-2 border-r-2 border-primary-500" />
+              <div className="absolute bottom-3 left-3 w-6 h-6 border-b-2 border-l-2 border-primary-500" />
+              <div className="absolute bottom-3 right-3 w-6 h-6 border-b-2 border-r-2 border-primary-500" />
+              
+              <QrCode className="h-20 w-20 text-slate-800" />
+            </div>
+
+            {/* Simulating scanning shortcuts */}
+            <div className="space-y-2 border-t border-slate-50 pt-3 text-left">
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Simulate Scan (Select peer profile)</label>
+              <select
+                onChange={(e) => {
+                  if (e.target.value) {
+                    setScannerOpen(false);
+                    navigate(`/connect/${e.target.value}`);
+                  }
+                }}
+                defaultValue=""
+                className="w-full rounded-lg border border-slate-200 bg-slate-50/50 px-3 py-2 text-xs text-slate-700 focus:bg-white focus:border-primary-500 focus:outline-none"
+              >
+                <option value="" disabled>-- Select student to scan --</option>
+                {students.filter(s => s.id !== currentUser.id).map(student => (
+                  <option key={student.id} value={student.id}>{student.name} ({student.college || 'Peer'})</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="pt-2">
+              <Button 
+                variant="outline" 
+                onClick={() => setScannerOpen(false)}
+                className="w-full font-bold"
+              >
+                Cancel Scanner
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
 
       {/* Toast popup */}
       {toastMsg && <Toast message={toastMsg} onClose={() => setToastMsg('')} />}

@@ -50,6 +50,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
 
   const navigationItems = [
     { name: 'Dashboard', path: '/', icon: <LayoutDashboard className="h-5 w-5" /> },
+    { name: 'Project Board', path: '/projects', icon: <Briefcase className="h-5 w-5" /> },
     { name: 'Discover', path: '/discover', icon: <Compass className="h-5 w-5" /> },
     { name: 'My Projects', path: '/my-projects', icon: <Briefcase className="h-5 w-5" /> },
     { name: 'Find Teammates', path: '/team-builder', icon: <Users className="h-5 w-5" /> },

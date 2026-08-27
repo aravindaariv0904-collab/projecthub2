@@ -17,11 +17,14 @@ import { Bookmarks } from './features/bookmarks/Bookmarks';
 import { Settings } from './features/settings/Settings';
 import { Profile } from './features/profile/Profile';
 import { IdeaWizard } from './features/idea/IdeaWizard';
+import { ProjectBoardPage } from './features/projects/ProjectBoardPage';
+import { PublicProfileConnect } from './features/profile/PublicProfileConnect';
 
 // Auth Pages imports
 import { Login } from './features/auth/Login';
 import { SignUp } from './features/auth/SignUp';
 import { ForgotPassword } from './features/auth/ForgotPassword';
+import { LandingPage } from './features/landing/LandingPage';
 
 // Guard component that redirects to login if user session is missing
 const ProtectedRoutes = () => {
@@ -47,6 +50,18 @@ const GuestRoutes = () => {
   );
 };
 
+// Dynamic Home route resolver based on auth state
+const HomeResolver = () => {
+  const { currentUser } = useApp();
+  return currentUser ? (
+    <MainLayout>
+      <Dashboard />
+    </MainLayout>
+  ) : (
+    <LandingPage />
+  );
+};
+
 export const App: React.FC = () => {
   return (
     <AppProvider>
@@ -59,10 +74,16 @@ export const App: React.FC = () => {
             <Route path="/forgot-password" element={<ForgotPassword />} />
           </Route>
 
+          {/* Dynamic Resolver for home route */}
+          <Route path="/" element={<HomeResolver />} />
+
+          {/* Public Profile Connect Route */}
+          <Route path="/connect/:profileId" element={<PublicProfileConnect />} />
+
           {/* Protected student Dashboard routes */}
           <Route element={<ProtectedRoutes />}>
-            <Route path="/" element={<Dashboard />} />
             <Route path="/discover" element={<DiscoverProjects />} />
+            <Route path="/projects" element={<ProjectBoardPage />} />
             <Route path="/my-projects" element={<MyProjects />} />
             <Route path="/team-builder" element={<TeamBuilder />} />
             <Route path="/hackathons" element={<Hackathons />} />

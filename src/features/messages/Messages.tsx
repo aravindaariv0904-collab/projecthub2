@@ -11,13 +11,15 @@ export const Messages: React.FC = () => {
   const { currentUser, students, connections, directMessages, sendDirectMessage } = useApp();
   
   // Select which connection to chat with
-  const connectedStudents = connections
-    .filter(c => c.status === 'Connected' && (c.senderId === currentUser.id || c.receiverId === currentUser.id))
-    .map(c => {
-      const otherId = c.senderId === currentUser.id ? c.receiverId : c.senderId;
-      return students.find(s => s.id === otherId);
-    })
-    .filter(Boolean) as Student[];
+  const connectedStudents = currentUser
+    ? connections
+        .filter(c => c.status === 'Connected' && (c.senderId === currentUser.id || c.receiverId === currentUser.id))
+        .map(c => {
+          const otherId = c.senderId === currentUser.id ? c.receiverId : c.senderId;
+          return students.find(s => s.id === otherId);
+        })
+        .filter(Boolean) as Student[]
+    : [];
 
   const [activeRecipientId, setActiveRecipientId] = useState<string>(
     connectedStudents.length > 0 ? connectedStudents[0].id : ''

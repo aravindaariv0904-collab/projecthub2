@@ -25,17 +25,19 @@ export const Login: React.FC = () => {
 
     setLoading(true);
     
-    // Simulate slight network delay
-    setTimeout(() => {
-      const success = login(email);
-      setLoading(false);
-      
-      if (success) {
-        navigate('/');
-      } else {
-        setError('No student account found with this email. Try "arivera@stanford.edu" or sign up!');
-      }
-    }, 800);
+    login(email, password)
+      .then((res) => {
+        setLoading(false);
+        if (res.success) {
+          navigate('/');
+        } else {
+          setError(res.error || 'No student account found with this email and password combination. Try signing up!');
+        }
+      })
+      .catch((err) => {
+        setLoading(false);
+        setError(err.message || 'An unexpected authentication error occurred.');
+      });
   };
 
   return (

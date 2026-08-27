@@ -123,6 +123,7 @@ export interface Project {
   status: 'Planning' | 'Active' | 'Completed' | 'Archived';
   showcase?: ShowcaseData;
   creatorId: string;
+  deadline?: string;
 }
 
 export interface Hackathon {

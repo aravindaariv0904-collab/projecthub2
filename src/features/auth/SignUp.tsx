@@ -68,17 +68,30 @@ export const SignUp: React.FC = () => {
   };
 
   const handleFinish = () => {
+    setError('');
     signup({
       name,
       email,
+      password,
       college,
       course,
       year,
       bio,
       skills: selectedSkills,
       interests: selectedInterests
-    });
-    navigate('/');
+    })
+      .then((res) => {
+        if (res.success) {
+          navigate('/');
+        } else {
+          setError(res.error || 'Failed to create student account.');
+          setStep(1); // Go back to credentials step to correct errors
+        }
+      })
+      .catch((err) => {
+        setError(err.message || 'An unexpected error occurred during signup.');
+        setStep(1);
+      });
   };
 
   const yearOptions = [

@@ -428,7 +428,8 @@ export const mockProjects: Project[] = [
     githubRepoName: 'academic-builders/ai-study-assistant',
     progress: 33,
     status: 'Active',
-    creatorId: 'student-1'
+    creatorId: 'student-1',
+    deadline: '2026-10-15'
   },
   {
     id: 'project-2',
@@ -479,7 +480,8 @@ export const mockProjects: Project[] = [
     githubRepoName: '',
     progress: 33,
     status: 'Planning',
-    creatorId: 'student-2'
+    creatorId: 'student-2',
+    deadline: '2026-09-30'
   },
   {
     id: 'project-3',
@@ -518,7 +520,8 @@ export const mockProjects: Project[] = [
     githubRepoName: 'aishasec/peerendorse-contracts',
     progress: 0,
     status: 'Planning',
-    creatorId: 'student-6'
+    creatorId: 'student-6',
+    deadline: '2026-12-15'
   },
   {
     id: 'project-4',
@@ -575,7 +578,8 @@ export const mockProjects: Project[] = [
       completionDate: '2026-08-22',
       published: true
     },
-    creatorId: 'student-5'
+    creatorId: 'student-5',
+    deadline: '2026-08-25'
   }
 ];
 

@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import { Student, Project, Hackathon, Community, Notification, Task, Milestone, ProjectFile, ChatMessage, TeamMember, ShowcaseData, Connection, ProjectApplication, ProjectInvitation, BookmarksState } from '../types';
 import { mockStudents, mockProjects, mockHackathons, mockCommunities, mockNotifications } from '../data/mockData';
 import { storage } from '../services/storage';
+import { supabase } from '../lib/supabase';
 
 interface AppContextType {
   currentUser: Student | null;
@@ -14,10 +15,11 @@ interface AppContextType {
   applications: ProjectApplication[];
   invitations: ProjectInvitation[];
   bookmarks: BookmarksState;
-  login: (email: string) => boolean;
-  signup: (studentData: Partial<Student>) => void;
-  logout: () => void;
-  updateProfile: (updated: Partial<Student>) => void;
+  loading: boolean;
+  login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  signup: (studentData: Partial<Student> & { password?: string }) => Promise<{ success: boolean; error?: string }>;
+  logout: () => Promise<void>;
+  updateProfile: (updated: Partial<Student>) => Promise<{ success: boolean; error?: string }>;
   addProject: (project: Project) => void;
   updateProject: (project: Project) => void;
   deleteProject: (projectId: string) => void;
@@ -59,9 +61,8 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   // 1. Core state loaded from LocalStorage or Fallbacks
-  const [currentUser, setCurrentUser] = useState<Student | null>(() => 
-    storage.get<Student | null>('ph_current_user', mockStudents[0]) // Default to Pujitha since she is first
-  );
+  const [currentUser, setCurrentUser] = useState<Student | null>(null);
+  const [loading, setLoading] = useState(true);
 
   const [students, setStudents] = useState<Student[]>(() => 
     storage.get<Student[]>('ph_students', mockStudents)
@@ -115,7 +116,115 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     })
   );
 
-  // 2. Sync to LocalStorage on modifications
+  // Helper to fetch single profile
+  const fetchProfile = async (userId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .single();
+
+      if (error) {
+        console.error('Error fetching user profile:', error);
+        setCurrentUser(null);
+        return null;
+      }
+
+      if (data) {
+        const profile: Student = {
+          id: data.id,
+          name: data.name,
+          email: data.email,
+          college: data.college || '',
+          course: data.course || '',
+          year: data.year || '',
+          bio: data.bio || '',
+          skills: data.skills || [],
+          interests: data.interests || [],
+          projectsCount: data.projects_count || 0,
+          hackathonsCount: data.hackathons_count || 0,
+          achievements: data.achievements || [],
+          githubUrl: data.github_url || '',
+          collaborationScore: data.collaboration_score || 100,
+          endorsements: [],
+          avatarUrl: data.avatar_url || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&q=80&w=120',
+          reputationTags: data.reputation_tags || []
+        };
+        setCurrentUser(profile);
+        return profile;
+      }
+    } catch (err) {
+      console.error('Unexpected error fetching profile:', err);
+      setCurrentUser(null);
+    }
+    return null;
+  };
+
+  // Helper to fetch all profiles
+  const fetchAllProfiles = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*');
+
+      if (!error && data) {
+        const mapped: Student[] = data.map(d => ({
+          id: d.id,
+          name: d.name,
+          email: d.email,
+          college: d.college || '',
+          course: d.course || '',
+          year: d.year || '',
+          bio: d.bio || '',
+          skills: d.skills || [],
+          interests: d.interests || [],
+          projectsCount: d.projects_count || 0,
+          hackathonsCount: d.hackathons_count || 0,
+          achievements: d.achievements || [],
+          githubUrl: d.github_url || '',
+          collaborationScore: d.collaboration_score || 100,
+          endorsements: [],
+          avatarUrl: d.avatar_url || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&q=80&w=120',
+          reputationTags: d.reputation_tags || []
+        }));
+        setStudents(mapped);
+      }
+    } catch (err) {
+      console.error('Unexpected error fetching all profiles:', err);
+    }
+  };
+
+  useEffect(() => {
+    // Check initial session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session?.user) {
+        fetchProfile(session.user.id).then(() => setLoading(false));
+      } else {
+        setCurrentUser(null);
+        setLoading(false);
+      }
+    });
+
+    // Load other student profiles
+    fetchAllProfiles();
+
+    // Listen to Auth state changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (session?.user) {
+        await fetchProfile(session.user.id);
+      } else {
+        setCurrentUser(null);
+      }
+      setLoading(false);
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  // 2. Sync to LocalStorage on modifications (Skip local profile caching)
   useEffect(() => { storage.set('ph_current_user', currentUser); }, [currentUser]);
   useEffect(() => { storage.set('ph_students', students); }, [students]);
   useEffect(() => { storage.set('ph_projects', projects); }, [projects]);
@@ -133,48 +242,117 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // 3. Methods implementations
 
-  const login = (email: string): boolean => {
-    const found = students.find(s => s.email.toLowerCase() === email.toLowerCase());
-    if (found) {
-      setCurrentUser(found);
-      return true;
+  const login = async (email: string, password: string): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password
+      });
+
+      if (error) {
+        return { success: false, error: error.message };
+      }
+
+      if (data.user) {
+        await fetchProfile(data.user.id);
+        await fetchAllProfiles();
+        return { success: true };
+      }
+      return { success: false, error: 'Login succeeded but user was null' };
+    } catch (err: any) {
+      return { success: false, error: err.message || 'An unexpected error occurred' };
     }
-    return false;
   };
 
-  const signup = (studentData: Partial<Student>) => {
-    const newStudent: Student = {
-      id: makeId('student'),
-      name: studentData.name || 'New Student',
-      email: studentData.email || 'student@college.edu',
-      college: studentData.college || 'State University',
-      course: studentData.course || 'Informatics',
-      year: studentData.year || 'Freshman',
-      bio: studentData.bio || 'Collaboration enthusiast.',
-      skills: studentData.skills || [],
-      interests: studentData.interests || [],
-      projectsCount: 0,
-      hackathonsCount: 0,
-      achievements: [],
-      githubUrl: studentData.githubUrl || 'github.com',
-      collaborationScore: 90, // Baseline score
-      endorsements: [],
-      avatarUrl: studentData.avatarUrl || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&q=80&w=120',
-      reputationTags: ['New Member']
-    };
-    setStudents(prev => [...prev, newStudent]);
-    setCurrentUser(newStudent);
+  const signup = async (studentData: Partial<Student> & { password?: string }): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const { data, error } = await supabase.auth.signUp({
+        email: studentData.email || '',
+        password: studentData.password || '',
+        options: {
+          data: {
+            name: studentData.name || 'New Student'
+          }
+        }
+      });
+
+      if (error) {
+        return { success: false, error: error.message };
+      }
+
+      if (data.user) {
+        // Enforce a quick profile update with signup metadata (trigger created the row)
+        const { error: updateError } = await supabase
+          .from('profiles')
+          .update({
+            college: studentData.college,
+            course: studentData.course,
+            year: studentData.year,
+            bio: studentData.bio,
+            skills: studentData.skills,
+            interests: studentData.interests,
+            avatar_url: studentData.avatarUrl
+          })
+          .eq('id', data.user.id);
+
+        if (updateError) {
+          console.error('Error seeding student profile details:', updateError);
+        }
+
+        await fetchProfile(data.user.id);
+        await fetchAllProfiles();
+        return { success: true };
+      }
+      return { success: false, error: 'Sign up succeeded but user was null' };
+    } catch (err: any) {
+      return { success: false, error: err.message || 'An unexpected error occurred' };
+    }
   };
 
-  const logout = () => {
+  const logout = async (): Promise<void> => {
+    await supabase.auth.signOut();
     setCurrentUser(null);
   };
 
-  const updateProfile = (updated: Partial<Student>) => {
-    if (!currentUser) return;
-    const newProfile = { ...currentUser, ...updated } as Student;
-    setCurrentUser(newProfile);
-    setStudents(prev => prev.map(s => s.id === currentUser.id ? newProfile : s));
+  const updateProfile = async (updated: Partial<Student>): Promise<{ success: boolean; error?: string }> => {
+    if (!currentUser) {
+      return { success: false, error: 'No user is logged in' };
+    }
+
+    try {
+      const dbPayload = {
+        name: updated.name,
+        college: updated.college,
+        course: updated.course,
+        year: updated.year,
+        bio: updated.bio,
+        skills: updated.skills,
+        interests: updated.interests,
+        avatar_url: updated.avatarUrl,
+        github_url: updated.githubUrl
+      };
+
+      const cleanPayload = Object.fromEntries(
+        Object.entries(dbPayload).filter(([_, v]) => v !== undefined)
+      );
+
+      const { error } = await supabase
+        .from('profiles')
+        .update(cleanPayload)
+        .eq('id', currentUser.id);
+
+      if (error) {
+        return { success: false, error: error.message };
+      }
+
+      const updatedUser = { ...currentUser, ...updated } as Student;
+      setCurrentUser(updatedUser);
+      setStudents(prev => prev.map(s => s.id === currentUser.id ? updatedUser : s));
+
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err.message || 'An unexpected error occurred' };
+    }
   };
 
   const addProject = (project: Project) => {
@@ -724,6 +902,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         applications,
         invitations,
         bookmarks,
+        loading,
         login,
         signup,
         logout,

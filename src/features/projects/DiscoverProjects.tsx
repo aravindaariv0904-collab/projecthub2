@@ -587,7 +587,7 @@ export const DiscoverProjects: React.FC = () => {
                   <div className="flex flex-wrap gap-1">
                     {selectedProject.requiredSkills?.map(s => (
                       <Badge key={s.name} variant="neutral" size="sm" className="text-[9px] bg-slate-50 border-none">
-                        {s.name} ({s.level})
+                        {s.name} ({s.priority})
                       </Badge>
                     )) || <span className="text-xs text-slate-500">None specified</span>}
                   </div>

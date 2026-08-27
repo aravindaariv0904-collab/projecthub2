@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useApp } from '../../store/AppContext';
+import { supabase } from '../../lib/supabase';
 import { Card } from '../../components/Card';
 import { Button } from '../../components/Button';
 import { Input } from '../../components/Input';
@@ -43,9 +44,9 @@ export const Settings: React.FC = () => {
 
   if (!currentUser) return null;
 
-  const handleSaveSettings = (e: React.FormEvent) => {
+  const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
-    updateProfile({
+    const res = await updateProfile({
       name,
       email,
       college,
@@ -53,21 +54,33 @@ export const Settings: React.FC = () => {
       year,
       avatarUrl
     });
-    setToastMsg('Settings updated successfully!');
-    setToastType('success');
+    if (res.success) {
+      setToastMsg('Settings updated successfully!');
+      setToastType('success');
+    } else {
+      setToastMsg(res.error || 'Failed to update settings.');
+      setToastType('error');
+    }
   };
 
-  const handleSaveSecurity = (e: React.FormEvent) => {
+  const handleSaveSecurity = async (e: React.FormEvent) => {
     e.preventDefault();
     if (newPassword !== confirmPassword) {
       setToastMsg('New passwords do not match!');
       setToastType('error');
       return;
     }
-    setToastMsg('Password updated successfully!');
-    setToastType('success');
-    setNewPassword('');
-    setConfirmPassword('');
+    
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
+    if (!error) {
+      setToastMsg('Password updated successfully!');
+      setToastType('success');
+      setNewPassword('');
+      setConfirmPassword('');
+    } else {
+      setToastMsg(error.message || 'Failed to update password.');
+      setToastType('error');
+    }
   };
 
   const yearOptions = [
