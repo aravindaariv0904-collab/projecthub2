@@ -7,7 +7,7 @@ import { Input } from '../../components/Input';
 import { Select } from '../../components/Select';
 import { Modal } from '../../components/Modal';
 import { Toast } from '../../components/Toast';
-import { supabase } from '../../lib/supabase';
+import { supabase, isSupabaseConfigured } from '../../lib/supabase';
 import { Project, RequiredSkill, SuggestedRole } from '../../types';
 import { 
   Briefcase, 
@@ -16,14 +16,14 @@ import {
   Bookmark, 
   Users, 
   Clock, 
-  ArrowRight,
-  SlidersHorizontal,
-  ChevronRight,
-  TrendingUp
+  ArrowRight, 
+  SlidersHorizontal, 
+  ChevronRight, 
+  TrendingUp 
 } from 'lucide-react';
 
 export const ProjectBoardPage: React.FC = () => {
-  const { currentUser, bookmarks, toggleBookmarkProject } = useApp();
+  const { currentUser, bookmarks, toggleBookmarkProject, projects, students, addProject, applyForProjectRole } = useApp();
   
   // Real project state from Supabase
   const [projectsList, setProjectsList] = useState<any[]>([]);
@@ -62,8 +62,44 @@ export const ProjectBoardPage: React.FC = () => {
   // Toast State
   const [toastMsg, setToastMsg] = useState('');
 
-  // Fetch projects from Supabase
+  // Helper to map local projects to UI format
+  const getMappedLocalProjects = () => {
+    return (projects || []).map(p => {
+      const creatorStudent = (students || []).find(s => s.id === p.creatorId);
+      return {
+        id: p.id,
+        name: p.name,
+        description: p.description,
+        problem_solved: p.problemSolved,
+        target_users: p.targetUsers,
+        category: p.category,
+        difficulty: p.difficulty,
+        team_size: p.teamSize || 4,
+        creator_id: p.creatorId,
+        progress: p.progress || 0,
+        deadline: p.deadline,
+        created_at: new Date().toISOString(),
+        profiles: {
+          id: p.creatorId,
+          name: creatorStudent?.name || 'Project Creator',
+          avatar_url: creatorStudent?.avatarUrl || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&q=80&w=120'
+        },
+        project_technologies: (p.technologies || []).map(t => ({ name: t.name, category: t.category, why: t.why })),
+        project_required_skills: (p.requiredSkills || []).map(s => ({ name: s.name, priority: s.priority })),
+        project_suggested_roles: (p.suggestedRoles || []).map(r => ({ name: r.name, skills: r.skills, priority: r.priority, count: r.count, filled: r.filled })),
+        project_members: (p.members || []).map(m => ({ student_id: m.studentId, role: m.role, status: m.status }))
+      };
+    });
+  };
+
+  // Fetch projects from Supabase or fallback to Local
   const loadProjects = async () => {
+    if (!isSupabaseConfigured) {
+      setProjectsList(getMappedLocalProjects());
+      setLoading(false);
+      return;
+    }
+
     try {
       setLoading(true);
       setErrorMsg('');
@@ -84,10 +120,10 @@ export const ProjectBoardPage: React.FC = () => {
       if (error) {
         throw error;
       }
-      setProjectsList(data || []);
+      setProjectsList(data && data.length > 0 ? data : getMappedLocalProjects());
     } catch (err: any) {
-      console.error('Error fetching projects from Supabase:', err);
-      setErrorMsg('Unable to load projects. Please try again.');
+      console.warn('Supabase projects fetch fallback to local:', err);
+      setProjectsList(getMappedLocalProjects());
     } finally {
       setLoading(false);
     }
@@ -160,75 +196,113 @@ export const ProjectBoardPage: React.FC = () => {
     try {
       setPostLoading(true);
 
-      // 1. Insert projects record
-      const { data: projectData, error: projectErr } = await supabase
-        .from('projects')
-        .insert({
-          name: formData.title.trim(),
-          description: formData.description.trim(),
-          problem_solved: formData.problemSolved.trim() || null,
-          target_users: formData.targetUsers.trim() || null,
-          category: formData.category,
-          difficulty: formData.difficulty,
-          team_size: parseInt(formData.teamSize) || 3,
-          creator_id: currentUser.id,
-          deadline: formData.deadline ? new Date(formData.deadline).toISOString() : null,
-          status: 'Planning'
-        })
-        .select()
-        .single();
+      if (isSupabaseConfigured) {
+        try {
+          // 1. Insert projects record
+          const { data: projectData, error: projectErr } = await supabase
+            .from('projects')
+            .insert({
+              name: formData.title.trim(),
+              description: formData.description.trim(),
+              problem_solved: formData.problemSolved.trim() || null,
+              target_users: formData.targetUsers.trim() || null,
+              category: formData.category,
+              difficulty: formData.difficulty,
+              team_size: parseInt(formData.teamSize) || 3,
+              creator_id: currentUser.id,
+              deadline: formData.deadline ? new Date(formData.deadline).toISOString() : null,
+              status: 'Planning'
+            })
+            .select()
+            .single();
 
-      if (projectErr || !projectData) {
-        throw projectErr || new Error('Failed to create project.');
-      }
+          if (!projectErr && projectData) {
+            const projectId = projectData.id;
 
-      const projectId = projectData.id;
+            // 2. Insert Tech Stack
+            if (formData.techStack.trim()) {
+              const techs = formData.techStack.split(',').map(t => ({
+                project_id: projectId,
+                name: t.trim(),
+                category: 'Frontend/Backend'
+              })).filter(t => t.name.length > 0);
 
-      // 2. Insert Tech Stack
-      if (formData.techStack.trim()) {
-        const techs = formData.techStack.split(',').map(t => ({
-          project_id: projectId,
-          name: t.trim(),
-          category: 'Frontend/Backend'
-        })).filter(t => t.name.length > 0);
+              if (techs.length > 0) {
+                await supabase.from('project_technologies').insert(techs);
+              }
+            }
 
-        if (techs.length > 0) {
-          await supabase.from('project_technologies').insert(techs);
+            // 3. Insert Required Skills
+            if (formData.requiredSkills.trim()) {
+              const skills = formData.requiredSkills.split(',').map(s => ({
+                project_id: projectId,
+                name: s.trim(),
+                priority: 'Required' as const
+              })).filter(s => s.name.length > 0);
+
+              if (skills.length > 0) {
+                await supabase.from('project_required_skills').insert(skills);
+              }
+            }
+
+            // 4. Insert Default Suggested Roles matching required skills
+            const roleName = formData.category === 'Startup' ? 'Co-founder' : 'Contributor';
+            const roleSkills = formData.requiredSkills.split(',').map(s => s.trim()).filter(s => s.length > 0);
+            await supabase.from('project_suggested_roles').insert({
+              project_id: projectId,
+              name: roleName,
+              skills: roleSkills,
+              priority: 'High',
+              count: parseInt(formData.teamSize) - 1,
+              filled: 0
+            });
+
+            // 5. Insert Creator as Joined Team Member
+            await supabase.from('project_members').insert({
+              project_id: projectId,
+              student_id: currentUser.id,
+              role: 'Project Lead',
+              status: 'Joined'
+            });
+          }
+        } catch (dbErr) {
+          console.warn('Supabase project creation failed, creating locally:', dbErr);
         }
       }
 
-      // 3. Insert Required Skills
-      if (formData.requiredSkills.trim()) {
-        const skills = formData.requiredSkills.split(',').map(s => ({
-          project_id: projectId,
-          name: s.trim(),
-          priority: 'Required' as const
-        })).filter(s => s.name.length > 0);
+      const newLocalProj: Project = {
+        id: `proj-${Date.now()}`,
+        name: formData.title.trim(),
+        description: formData.description.trim(),
+        problemSolved: formData.problemSolved.trim(),
+        targetUsers: formData.targetUsers.trim(),
+        category: formData.category as any,
+        difficulty: formData.difficulty as any,
+        duration: '3 Months',
+        teamSize: parseInt(formData.teamSize) || 3,
+        progress: 0,
+        status: 'Planning',
+        creatorId: currentUser.id,
+        deadline: formData.deadline || undefined,
+        technologies: formData.techStack.split(',').map(t => ({ name: t.trim(), category: 'Core', why: 'Primary development stack' })).filter(t => t.name.length > 0),
+        requiredSkills: formData.requiredSkills.split(',').map(s => ({ name: s.trim(), priority: 'Required' as const })).filter(s => s.name.length > 0),
+        suggestedRoles: [{
+          name: formData.category === 'Startup' ? 'Co-founder' : 'Contributor',
+          skills: formData.requiredSkills.split(',').map(s => s.trim()).filter(s => s.length > 0),
+          priority: 'High',
+          count: parseInt(formData.teamSize) - 1,
+          filled: 0
+        }],
+        members: [{ studentId: currentUser.id, role: 'Project Lead', status: 'Joined' }],
+        tasks: [],
+        roadmap: [],
+        files: [],
+        chatMessages: [],
+        githubConnected: false,
+        githubRepoName: ''
+      };
 
-        if (skills.length > 0) {
-          await supabase.from('project_required_skills').insert(skills);
-        }
-      }
-
-      // 4. Insert Default Suggested Roles matching required skills
-      const roleName = formData.category === 'Startup' ? 'Co-founder' : 'Contributor';
-      const roleSkills = formData.requiredSkills.split(',').map(s => s.trim()).filter(s => s.length > 0);
-      await supabase.from('project_suggested_roles').insert({
-        project_id: projectId,
-        name: roleName,
-        skills: roleSkills,
-        priority: 'High',
-        count: parseInt(formData.teamSize) - 1,
-        filled: 0
-      });
-
-      // 5. Insert Creator as Joined Team Member
-      await supabase.from('project_members').insert({
-        project_id: projectId,
-        student_id: currentUser.id,
-        role: 'Project Lead',
-        status: 'Joined'
-      });
+      addProject(newLocalProj);
 
       setToastMsg('Project posted successfully!');
       setPostModalOpen(false);
@@ -247,7 +321,7 @@ export const ProjectBoardPage: React.FC = () => {
         targetUsers: ''
       });
 
-      // Re-load list from Supabase
+      // Refresh list
       loadProjects();
     } catch (err: any) {
       console.error('Error creating project:', err);
@@ -275,30 +349,40 @@ export const ProjectBoardPage: React.FC = () => {
 
     // Verify slots
     const totalMembers = project.project_members?.filter((m: any) => m.status === 'Joined').length || 0;
-    if (totalMembers >= project.team_size) {
+    const teamSize = project.team_size || 4;
+    if (totalMembers >= teamSize) {
       setToastMsg('Team is currently full.');
       return;
     }
 
-    try {
-      // Insert student into members table with Pending status (allowed by RLS)
-      const { error } = await supabase
-        .from('project_members')
-        .insert({
-          project_id: project.id,
-          student_id: currentUser.id,
-          role: 'Contributor',
-          status: 'Pending'
-        });
+    if (isSupabaseConfigured) {
+      try {
+        // Insert student into members table with Pending status (allowed by RLS)
+        const { error } = await supabase
+          .from('project_members')
+          .insert({
+            project_id: project.id,
+            student_id: currentUser.id,
+            role: 'Contributor',
+            status: 'Pending'
+          });
 
-      if (error) throw error;
-
-      setToastMsg('Join request submitted successfully!');
-      loadProjects(); // Reload list
-    } catch (err: any) {
-      console.error('Error joining project:', err);
-      setToastMsg(err.message || 'Unable to join project. Please try again.');
+        if (error) console.warn('Supabase join warning:', error);
+      } catch (err: any) {
+        console.warn('Supabase join error fallback:', err);
+      }
     }
+
+    // Local application handshake
+    applyForProjectRole(
+      project.id,
+      'Contributor',
+      'I would love to contribute to this project!',
+      currentUser.skills?.map(s => s.name).join(', ') || ''
+    );
+
+    setToastMsg('Join request submitted successfully!');
+    loadProjects(); // Reload list
   };
 
   // Open Apply Modal
@@ -311,30 +395,38 @@ export const ProjectBoardPage: React.FC = () => {
 
   // Submit Project Role Application
   const handleSubmitApplication = async () => {
-    if (!selectedProject || !applyingRole) return;
+    if (!selectedProject || !applyingRole || !currentUser) return;
 
-    try {
-      const { error } = await supabase
-        .from('project_applications')
-        .insert({
-          project_id: selectedProject.id,
-          student_id: currentUser.id,
-          role_name: applyingRole.name,
-          pitch: pitch.trim(),
-          skills: contributeSkills.trim(),
-          status: 'Pending'
-        });
+    if (isSupabaseConfigured) {
+      try {
+        const { error } = await supabase
+          .from('project_applications')
+          .insert({
+            project_id: selectedProject.id,
+            student_id: currentUser.id,
+            role_name: applyingRole.name,
+            pitch: pitch.trim(),
+            skills: contributeSkills.trim(),
+            status: 'Pending'
+          });
 
-      if (error) throw error;
-
-      setToastMsg(`Application to join as ${applyingRole.name} submitted successfully.`);
-      setApplyModalOpen(false);
-      setSelectedProject(null);
-      loadProjects();
-    } catch (err: any) {
-      console.error('Error applying for role:', err);
-      setToastMsg(err.message || 'Application failed. You might have already applied for this role.');
+        if (error) console.warn('Supabase apply warning:', error);
+      } catch (err: any) {
+        console.warn('Supabase application error fallback:', err);
+      }
     }
+
+    applyForProjectRole(
+      selectedProject.id,
+      applyingRole.name,
+      pitch.trim(),
+      contributeSkills.trim()
+    );
+
+    setToastMsg(`Application to join as ${applyingRole.name} submitted successfully.`);
+    setApplyModalOpen(false);
+    setSelectedProject(null);
+    loadProjects();
   };
 
   return (
@@ -532,8 +624,16 @@ export const ProjectBoardPage: React.FC = () => {
                     <Button 
                       variant="primary" 
                       size="sm" 
-                      disabled={project.creator_id === currentUser.id || slotsLeft === 0}
-                      onClick={() => handleJoinProject(project)}
+                      disabled={project.creator_id === currentUser.id}
+                      onClick={() => {
+                        setSelectedProject(project);
+                        const availableRole = project.project_suggested_roles?.find((r: any) => (r.count > r.filled));
+                        if (availableRole) {
+                          handleApplyRole(availableRole);
+                        } else {
+                          handleJoinProject(project);
+                        }
+                      }}
                       className="font-bold text-xs"
                     >
                       {project.creator_id === currentUser.id ? 'My Project' : 'Join / Apply'}

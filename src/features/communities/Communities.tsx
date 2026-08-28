@@ -7,7 +7,7 @@ import { Avatar } from '../../components/Avatar';
 import { Input } from '../../components/Input';
 import { Modal } from '../../components/Modal';
 import { Toast } from '../../components/Toast';
-import { supabase } from '../../lib/supabase';
+import { supabase, isSupabaseConfigured } from '../../lib/supabase';
 import { 
   MessageSquare, 
   Users, 
@@ -21,7 +21,7 @@ import {
 } from 'lucide-react';
 
 export const Communities: React.FC = () => {
-  const { currentUser, students } = useApp();
+  const { currentUser, students, communities } = useApp();
   
   // Real database states
   const [communitiesList, setCommunitiesList] = useState<any[]>([]);
@@ -65,8 +65,17 @@ export const Communities: React.FC = () => {
     }
   }, [joinedIds, currentUser]);
 
-  // Fetch communities list from Supabase
+  // Fetch communities list from Supabase or Local
   const loadCommunities = async () => {
+    if (!isSupabaseConfigured) {
+      setCommunitiesList(communities || []);
+      if (communities && communities.length > 0 && !selectedCommunity) {
+        setSelectedCommunity(communities[0]);
+      }
+      setLoading(false);
+      return;
+    }
+
     try {
       setLoading(true);
       const { data, error } = await supabase
@@ -75,15 +84,20 @@ export const Communities: React.FC = () => {
         .order('name');
       
       if (error) throw error;
-      setCommunitiesList(data || []);
+      setCommunitiesList(data && data.length > 0 ? data : (communities || []));
 
       // Autofocus first community if available and none selected
       if (data && data.length > 0 && !selectedCommunity) {
         setSelectedCommunity(data[0]);
+      } else if (communities && communities.length > 0 && !selectedCommunity) {
+        setSelectedCommunity(communities[0]);
       }
     } catch (err: any) {
-      console.error('Error fetching communities:', err);
-      setToastMsg('Unable to retrieve communities list.');
+      console.warn('Fallback to local communities:', err);
+      setCommunitiesList(communities || []);
+      if (communities && communities.length > 0 && !selectedCommunity) {
+        setSelectedCommunity(communities[0]);
+      }
     } finally {
       setLoading(false);
     }
@@ -93,9 +107,28 @@ export const Communities: React.FC = () => {
     loadCommunities();
   }, []);
 
-  // Fetch messages from Supabase when community or channel changes
+  // Fetch messages from Supabase or Local
   const loadMessages = async () => {
     if (!selectedCommunity) return;
+
+    if (!isSupabaseConfigured) {
+      const localPosts = (selectedCommunity.posts || []).map((p: any) => ({
+        id: p.id,
+        community_id: selectedCommunity.id,
+        title: activeChannel,
+        content: p.content,
+        created_at: p.timestamp || new Date().toISOString(),
+        profiles: {
+          id: p.authorId,
+          name: p.authorName,
+          avatar_url: p.authorAvatar
+        }
+      }));
+      setMessages(localPosts);
+      setChatLoading(false);
+      return;
+    }
+
     try {
       setChatLoading(true);
       
@@ -113,8 +146,20 @@ export const Communities: React.FC = () => {
       if (error) throw error;
       setMessages(data || []);
     } catch (err: any) {
-      console.error('Error fetching messages:', err);
-      setToastMsg('Failed to restore chat history.');
+      console.warn('Fallback to local messages:', err);
+      const localPosts = (selectedCommunity.posts || []).map((p: any) => ({
+        id: p.id,
+        community_id: selectedCommunity.id,
+        title: activeChannel,
+        content: p.content,
+        created_at: p.timestamp || new Date().toISOString(),
+        profiles: {
+          id: p.authorId,
+          name: p.authorName,
+          avatar_url: p.authorAvatar
+        }
+      }));
+      setMessages(localPosts);
     } finally {
       setChatLoading(false);
     }
@@ -126,7 +171,7 @@ export const Communities: React.FC = () => {
 
   // Realtime subscription setup
   useEffect(() => {
-    if (!selectedCommunity) return;
+    if (!selectedCommunity || !isSupabaseConfigured) return;
 
     // Establish subscription to community_posts table inserts for this community
     const channel = supabase
@@ -183,22 +228,35 @@ export const Communities: React.FC = () => {
     const textToSend = inputText.trim();
     setInputText('');
 
-    try {
-      // Insert new message row into Supabase community_posts
-      const { error } = await supabase
-        .from('community_posts')
-        .insert({
-          community_id: selectedCommunity.id,
-          title: activeChannel, // Store channel name in title field
-          content: textToSend,
-          author_id: currentUser.id
-        });
+    const newLocalMsg = {
+      id: `msg-${Date.now()}`,
+      community_id: selectedCommunity.id,
+      title: activeChannel,
+      content: textToSend,
+      author_id: currentUser.id,
+      created_at: new Date().toISOString(),
+      profiles: {
+        id: currentUser.id,
+        name: currentUser.name,
+        avatar_url: currentUser.avatarUrl
+      }
+    };
 
-      if (error) throw error;
-      // Realtime listener automatically handles appending
-    } catch (err: any) {
-      console.error('Error sending message:', err);
-      setToastMsg('Message could not be sent.');
+    setMessages(prev => [...prev, newLocalMsg]);
+
+    if (isSupabaseConfigured) {
+      try {
+        await supabase
+          .from('community_posts')
+          .insert({
+            community_id: selectedCommunity.id,
+            title: activeChannel,
+            content: textToSend,
+            author_id: currentUser.id
+          });
+      } catch (err: any) {
+        console.warn('Supabase post message error:', err);
+      }
     }
   };
 

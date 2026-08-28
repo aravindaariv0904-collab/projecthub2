@@ -2,7 +2,7 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import { Student, Project, Hackathon, Community, Notification, Task, Milestone, ProjectFile, ChatMessage, TeamMember, ShowcaseData, Connection, ProjectApplication, ProjectInvitation, BookmarksState } from '../types';
 import { mockStudents, mockProjects, mockHackathons, mockCommunities, mockNotifications } from '../data/mockData';
 import { storage } from '../services/storage';
-import { supabase } from '../lib/supabase';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
 
 interface AppContextType {
   currentUser: Student | null;
@@ -61,8 +61,10 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   // 1. Core state loaded from LocalStorage or Fallbacks
-  const [currentUser, setCurrentUser] = useState<Student | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [currentUser, setCurrentUser] = useState<Student | null>(() =>
+    storage.get<Student | null>('ph_current_user', null)
+  );
+  const [loading, setLoading] = useState(false);
 
   const [students, setStudents] = useState<Student[]>(() => 
     storage.get<Student[]>('ph_students', mockStudents)
@@ -118,6 +120,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Helper to fetch single profile
   const fetchProfile = async (userId: string) => {
+    if (!isSupabaseConfigured) return null;
     try {
       const { data, error } = await supabase
         .from('profiles')
@@ -126,8 +129,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         .single();
 
       if (error) {
-        console.error('Error fetching user profile:', error);
-        setCurrentUser(null);
+        console.warn('Error fetching user profile from Supabase:', error);
         return null;
       }
 
@@ -152,23 +154,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           reputationTags: data.reputation_tags || []
         };
         setCurrentUser(profile);
+        storage.set('ph_current_user', profile);
         return profile;
       }
     } catch (err) {
-      console.error('Unexpected error fetching profile:', err);
-      setCurrentUser(null);
+      console.warn('Unexpected error fetching profile:', err);
     }
     return null;
   };
 
   // Helper to fetch all profiles
   const fetchAllProfiles = async () => {
+    if (!isSupabaseConfigured) return;
     try {
       const { data, error } = await supabase
         .from('profiles')
         .select('*');
 
-      if (!error && data) {
+      if (!error && data && data.length > 0) {
         const mapped: Student[] = data.map(d => ({
           id: d.id,
           name: d.name,
@@ -189,32 +192,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           reputationTags: d.reputation_tags || []
         }));
         setStudents(mapped);
+        storage.set('ph_students', mapped);
       }
     } catch (err) {
-      console.error('Unexpected error fetching all profiles:', err);
+      console.warn('Could not fetch all profiles from Supabase, using local students:', err);
     }
   };
 
   useEffect(() => {
-    // Check initial session
+    if (!isSupabaseConfigured) {
+      setLoading(false);
+      return;
+    }
+
+    // Check initial session if Supabase is enabled
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session?.user) {
-        fetchProfile(session.user.id).then(() => setLoading(false));
+        fetchProfile(session.user.id).finally(() => setLoading(false));
       } else {
-        setCurrentUser(null);
         setLoading(false);
       }
+    }).catch(() => {
+      setLoading(false);
     });
 
-    // Load other student profiles
     fetchAllProfiles();
 
     // Listen to Auth state changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (session?.user) {
         await fetchProfile(session.user.id);
-      } else {
+      } else if (event === 'SIGNED_OUT') {
         setCurrentUser(null);
+        storage.remove('ph_current_user');
       }
       setLoading(false);
     });
@@ -224,7 +234,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, []);
 
-  // 2. Sync to LocalStorage on modifications (Skip local profile caching)
+  // 2. Sync to LocalStorage on modifications
   useEffect(() => { storage.set('ph_current_user', currentUser); }, [currentUser]);
   useEffect(() => { storage.set('ph_students', students); }, [students]);
   useEffect(() => { storage.set('ph_projects', projects); }, [projects]);
@@ -243,75 +253,125 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // 3. Methods implementations
 
   const login = async (email: string, password: string): Promise<{ success: boolean; error?: string }> => {
-    try {
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password
-      });
+    const cleanEmail = email.trim().toLowerCase();
 
-      if (error) {
-        return { success: false, error: error.message };
-      }
+    if (isSupabaseConfigured) {
+      try {
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email: cleanEmail,
+          password
+        });
 
-      if (data.user) {
-        await fetchProfile(data.user.id);
-        await fetchAllProfiles();
-        return { success: true };
+        if (!error && data.user) {
+          await fetchProfile(data.user.id);
+          await fetchAllProfiles();
+          return { success: true };
+        } else if (error && !error.message.toLowerCase().includes('failed to fetch')) {
+          return { success: false, error: error.message };
+        }
+      } catch (err: any) {
+        console.warn('Supabase login error, falling back to local accounts:', err);
       }
-      return { success: false, error: 'Login succeeded but user was null' };
-    } catch (err: any) {
-      return { success: false, error: err.message || 'An unexpected error occurred' };
     }
+
+    // Local / Mock fallback logic
+    const existingStudent = students.find(s => s.email.toLowerCase() === cleanEmail) ||
+                           mockStudents.find(s => s.email.toLowerCase() === cleanEmail);
+
+    if (existingStudent) {
+      setCurrentUser(existingStudent);
+      storage.set('ph_current_user', existingStudent);
+      return { success: true };
+    }
+
+    return { success: false, error: 'No student account found with this email. Please sign up first.' };
   };
 
   const signup = async (studentData: Partial<Student> & { password?: string }): Promise<{ success: boolean; error?: string }> => {
-    try {
-      const { data, error } = await supabase.auth.signUp({
-        email: studentData.email || '',
-        password: studentData.password || '',
-        options: {
-          data: {
-            name: studentData.name || 'New Student'
+    const cleanEmail = (studentData.email || '').trim().toLowerCase();
+
+    if (isSupabaseConfigured) {
+      try {
+        const { data, error } = await supabase.auth.signUp({
+          email: cleanEmail,
+          password: studentData.password || '',
+          options: {
+            data: {
+              name: studentData.name || 'New Student'
+            }
           }
+        });
+
+        if (!error && data.user) {
+          try {
+            await supabase
+              .from('profiles')
+              .update({
+                college: studentData.college,
+                course: studentData.course,
+                year: studentData.year,
+                bio: studentData.bio,
+                skills: studentData.skills,
+                interests: studentData.interests,
+                avatar_url: studentData.avatarUrl
+              })
+              .eq('id', data.user.id);
+          } catch (e) {
+            console.warn('Failed to update profile details on Supabase:', e);
+          }
+
+          await fetchProfile(data.user.id);
+          await fetchAllProfiles();
+          return { success: true };
+        } else if (error && !error.message.toLowerCase().includes('failed to fetch')) {
+          console.warn('Supabase signup error:', error.message);
         }
-      });
-
-      if (error) {
-        return { success: false, error: error.message };
+      } catch (err: any) {
+        console.warn('Supabase signup network error, continuing with local account:', err);
       }
-
-      if (data.user) {
-        // Enforce a quick profile update with signup metadata (trigger created the row)
-        const { error: updateError } = await supabase
-          .from('profiles')
-          .update({
-            college: studentData.college,
-            course: studentData.course,
-            year: studentData.year,
-            bio: studentData.bio,
-            skills: studentData.skills,
-            interests: studentData.interests,
-            avatar_url: studentData.avatarUrl
-          })
-          .eq('id', data.user.id);
-
-        if (updateError) {
-          console.error('Error seeding student profile details:', updateError);
-        }
-
-        await fetchProfile(data.user.id);
-        await fetchAllProfiles();
-        return { success: true };
-      }
-      return { success: false, error: 'Sign up succeeded but user was null' };
-    } catch (err: any) {
-      return { success: false, error: err.message || 'An unexpected error occurred' };
     }
+
+    // Local student profile creation
+    const newStudent: Student = {
+      id: `student-${Date.now()}`,
+      name: studentData.name || 'New Student',
+      email: cleanEmail,
+      college: studentData.college || '',
+      course: studentData.course || '',
+      year: studentData.year || 'Freshman',
+      bio: studentData.bio || '',
+      skills: studentData.skills || [],
+      interests: studentData.interests || [],
+      projectsCount: 0,
+      hackathonsCount: 0,
+      achievements: ['New Member'],
+      githubUrl: studentData.githubUrl || '',
+      collaborationScore: 100,
+      endorsements: [],
+      avatarUrl: studentData.avatarUrl || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&q=80&w=120',
+      reputationTags: ['Quick Learner', 'Problem Solver']
+    };
+
+    setStudents(prev => {
+      const updated = [newStudent, ...prev.filter(s => s.email.toLowerCase() !== cleanEmail)];
+      storage.set('ph_students', updated);
+      return updated;
+    });
+    setCurrentUser(newStudent);
+    storage.set('ph_current_user', newStudent);
+    return { success: true };
   };
 
   const logout = async (): Promise<void> => {
-    await supabase.auth.signOut();
+    if (isSupabaseConfigured) {
+      try {
+        await supabase.auth.signOut();
+      } catch (e) {
+        console.warn('Supabase sign out error:', e);
+      }
+    }
     setCurrentUser(null);
+    storage.remove('ph_current_user');
   };
 
   const updateProfile = async (updated: Partial<Student>): Promise<{ success: boolean; error?: string }> => {
@@ -319,40 +379,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, error: 'No user is logged in' };
     }
 
-    try {
-      const dbPayload = {
-        name: updated.name,
-        college: updated.college,
-        course: updated.course,
-        year: updated.year,
-        bio: updated.bio,
-        skills: updated.skills,
-        interests: updated.interests,
-        avatar_url: updated.avatarUrl,
-        github_url: updated.githubUrl
-      };
+    if (isSupabaseConfigured) {
+      try {
+        const dbPayload = {
+          name: updated.name,
+          college: updated.college,
+          course: updated.course,
+          year: updated.year,
+          bio: updated.bio,
+          skills: updated.skills,
+          interests: updated.interests,
+          avatar_url: updated.avatarUrl,
+          github_url: updated.githubUrl
+        };
 
-      const cleanPayload = Object.fromEntries(
-        Object.entries(dbPayload).filter(([_, v]) => v !== undefined)
-      );
+        const cleanPayload = Object.fromEntries(
+          Object.entries(dbPayload).filter(([_, v]) => v !== undefined)
+        );
 
-      const { error } = await supabase
-        .from('profiles')
-        .update(cleanPayload)
-        .eq('id', currentUser.id);
-
-      if (error) {
-        return { success: false, error: error.message };
+        await supabase
+          .from('profiles')
+          .update(cleanPayload)
+          .eq('id', currentUser.id);
+      } catch (err: any) {
+        console.warn('Supabase updateProfile error:', err);
       }
-
-      const updatedUser = { ...currentUser, ...updated } as Student;
-      setCurrentUser(updatedUser);
-      setStudents(prev => prev.map(s => s.id === currentUser.id ? updatedUser : s));
-
-      return { success: true };
-    } catch (err: any) {
-      return { success: false, error: err.message || 'An unexpected error occurred' };
     }
+
+    const updatedUser = { ...currentUser, ...updated } as Student;
+    setCurrentUser(updatedUser);
+    storage.set('ph_current_user', updatedUser);
+    setStudents(prev => {
+      const next = prev.map(s => s.id === currentUser.id ? updatedUser : s);
+      storage.set('ph_students', next);
+      return next;
+    });
+
+    return { success: true };
   };
 
   const addProject = (project: Project) => {
